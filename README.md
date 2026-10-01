@@ -43,7 +43,7 @@ Use the full account ID printed by `list` or `status`. To specify another deploy
 
 Status shows saved identities, runtime/account health, time since CPA became ready, available provider usage windows and their reset times. Missing usage is reported as unavailable, never as zero usage. Request counts cover the current CPA process, not account history. A saved credential does not by itself prove that the provider will accept inference.
 
-Account selection depends on the session information sent by the editor. Amp's actual requests have not yet been checked against connected OAuth accounts, so this deployment does not guarantee that an Amp thread keeps one account or reuses its provider cache.
+Account selection depends on the session information sent by the editor. When an editor omits a session ID, CPA compares earlier messages to select the account. Rewritten or compacted context can select another account. Amp's actual requests have not yet been checked against connected OAuth accounts, so this deployment does not guarantee that an Amp thread keeps one account or reuses its provider cache.
 
 Adding, reconnecting, or removing an account restarts the shared container and interrupts active streams. Removal is confirmed only after durable deletion. Failed account mutations keep the affected account pool blocked until recovery succeeds.
 
