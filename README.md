@@ -47,7 +47,7 @@ Account selection depends on the session information sent by the editor. When an
 
 On a quota rejection before streaming starts, CPA tries the remaining eligible accounts for the same user, provider, and model. It tries each credential once in that initial selection round. It does not wait for a cooldown, repeat the round, or restart an already-started stream. If no account can serve the request, the caller receives an error.
 
-CPA makes an account eligible again when its provider cooldown expires. `proxy status` shows retry and quota reset times; quota observations may be cached for 30 seconds. No manual reset or reconnect is needed for a quota cooldown. Reconnect only when the saved credential needs replacing.
+CPA makes an account eligible again when its provider cooldown expires. Recovery adds the original account back to the pool; an existing session keeps its replacement account. `proxy status` shows retry and quota reset times; quota observations may be cached for 30 seconds. Claude's cooldown can include up to 30 seconds of grace, so its retry time may be later than the displayed quota reset. No manual reset or reconnect is needed for a quota cooldown. Reconnect only when the saved credential needs replacing.
 
 Adding, reconnecting, or removing an account restarts the shared container and interrupts active streams. Removal is confirmed only after durable deletion. Failed account mutations keep the affected account pool blocked until recovery succeeds.
 
