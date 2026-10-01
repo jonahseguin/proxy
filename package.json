@@ -1,0 +1,42 @@
+{
+	"name": "@jonahseguin/proxy",
+	"private": true,
+	"bin": {
+		"proxy": "cli/index.ts"
+	},
+	"type": "module",
+	"scripts": {
+		"dev": "cf dev",
+		"cli": "bun cli/index.ts",
+		"deploy": "cf deploy",
+		"build": "cf build",
+		"deploy:check": "cf deploy --dry-run",
+		"types": "cf workers types --include-runtime=false",
+		"typecheck": "bun run types && tsc -p tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit",
+		"test": "vitest run",
+		"test:runtime": "bun run build && vitest run --config vitest.runtime.config.ts",
+		"lint": "oxlint .",
+		"lint:fix": "oxlint --fix . && oxfmt .",
+		"format": "oxfmt .",
+		"format:check": "oxfmt --check ."
+	},
+	"dependencies": {
+		"@clack/prompts": "1.8.1",
+		"@cloudflare/containers": "0.3.7",
+		"effect": "4.0.0-rc.117"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "5.20260810.1",
+		"@effect/vitest": "4.0.0-rc.117",
+		"@types/bun": "1.3.14",
+		"@types/node": "^26.2.0",
+		"cf": "1.0.0-beta.5",
+		"miniflare": "5.20260815.0-alpha",
+		"oxfmt": "^0.64.0",
+		"oxlint": "1.76.0",
+		"typescript": "7.0.2",
+		"vitest": "5.0.0",
+		"wrangler": "4.146.0"
+	},
+	"packageManager": "bun@1.3.14"
+}
