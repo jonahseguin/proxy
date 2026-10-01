@@ -54,7 +54,7 @@ export class ProxyContainer extends Container<Env> {
 				'usage-statistics-enabled': false,
 				debug: false,
 				'request-retry': 0,
-				'max-retry-credentials': 1,
+				'max-retry-credentials': 0,
 				'max-retry-interval': 0,
 				streaming: { 'bootstrap-retries': 0 },
 				'quota-exceeded': {

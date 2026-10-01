@@ -234,6 +234,18 @@ it.live('imports through the real Worker and CPA, survives restart, and disconne
 				await (
 					await mf.getR2Bucket('CREDENTIALS')
 				)
+					.get('config/config.yaml')
+					.then((o) => o?.json()),
+			).toMatchObject({
+				'request-retry': 0,
+				'max-retry-credentials': 0,
+				'max-retry-interval': 0,
+				streaming: { 'bootstrap-retries': 0 },
+			});
+			expect(
+				await (
+					await mf.getR2Bucket('CREDENTIALS')
+				)
 					.get(credentialKey('alice', 'claude', accountId(credential)))
 					.then((o) => o?.json()),
 			).toEqual({ ...credential, prefix: 'alice' });

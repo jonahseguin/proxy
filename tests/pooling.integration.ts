@@ -12,11 +12,12 @@ const run = promisify(execFile);
 const imageConfig = Schema.Struct({ image: Schema.Struct({ localReference: Schema.String }) });
 
 it.live(
-	'uses pinned CPA round robin and session affinity inside each owner and provider pool',
+	'keeps native pool affinity, retries quota failures before output, and readmits expired accounts',
 	() =>
 		Effect.tryPromise(async () => {
 			const directory = await mkdtemp(join(tmpdir(), 'proxy-pools-'));
 			const seen: { key: string; path: string }[] = [];
+			const failures = new Map<string, 'quota' | 'bootstrap' | 'partial'>();
 			const server = createServer((request, response) => {
 				void (async () => {
 					const chunks: Buffer[] = [];
@@ -27,10 +28,49 @@ it.live(
 						'';
 					const parsed = Schema.decodeUnknownSync(Schema.String)(key);
 					seen.push({ key: parsed, path: request.url ?? '' });
+					const failure = failures.get(parsed);
+					const quotaError = parsed.includes('codex')
+						? { type: 'usage_limit_reached', message: 'synthetic quota', resets_in_seconds: 10 }
+						: { type: 'rate_limit_error', message: 'synthetic quota' };
+					if (failure === 'quota') {
+						response.writeHead(429, {
+							'content-type': 'application/json',
+							'retry-after': '10',
+							'anthropic-ratelimit-unified-5h-status': 'rejected',
+							'anthropic-ratelimit-unified-5h-reset': String(Math.ceil(Date.now() / 1000) + 10),
+						});
+						response.end(JSON.stringify({ error: quotaError }));
+						return;
+					}
+					if (failure === 'bootstrap' || failure === 'partial') {
+						response.setHeader('content-type', 'text/event-stream');
+						if (failure === 'partial') {
+							response.write(
+								parsed.includes('codex')
+									? `data: ${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'partial output' })}\n\n`
+									: `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial output' } })}\n\n`,
+							);
+						}
+						const errorFrame = parsed.includes('codex')
+							? { type: 'error', status: 429, error: quotaError }
+							: { type: 'error', error: quotaError };
+						const finish = () =>
+							response.end(
+								`${parsed.includes('codex') ? '' : 'event: error\n'}data: ${JSON.stringify(errorFrame)}\n\n`,
+							);
+						if (failure === 'partial') setTimeout(finish, 100);
+						else finish();
+						return;
+					}
 					if (parsed.includes('codex')) {
 						response.setHeader('content-type', 'text/event-stream');
 						response.end(
 							`data: ${JSON.stringify({ type: 'response.completed', response: { id: 'synthetic-response', object: 'response', model: 'gpt-5.5', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'synthetic' }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } })}\n\n`,
+						);
+					} else if (JSON.parse(Buffer.concat(chunks).toString()).stream === true) {
+						response.setHeader('content-type', 'text/event-stream');
+						response.end(
+							`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'synthetic-message', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], usage: { input_tokens: 1, output_tokens: 0 } } })}\n\nevent: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'synthetic' } })}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`,
 						);
 					} else {
 						response.setHeader('content-type', 'application/json');
@@ -69,7 +109,7 @@ it.live(
 				'logging-to-file': false,
 				'usage-statistics-enabled': false,
 				'request-retry': 0,
-				'max-retry-credentials': 1,
+				'max-retry-credentials': 0,
 				'max-retry-interval': 0,
 				streaming: { 'bootstrap-retries': 0 },
 				routing: {
@@ -87,11 +127,23 @@ it.live(
 					key('alice', 'claude', 'one'),
 					key('alice', 'claude', 'two'),
 					key('bob', 'claude', 'one'),
+					key('bootstrap', 'claude', 'one'),
+					key('bootstrap', 'claude', 'two'),
+					key('exhausted', 'claude', 'one'),
+					key('exhausted', 'claude', 'two'),
+					key('http', 'claude', 'one'),
+					key('http', 'claude', 'two'),
 				],
 				'codex-api-key': [
 					key('alice', 'codex', 'one'),
 					key('alice', 'codex', 'two'),
 					key('bob', 'codex', 'one'),
+					key('bootstrap', 'codex', 'one'),
+					key('bootstrap', 'codex', 'two'),
+					key('exhausted', 'codex', 'one'),
+					key('exhausted', 'codex', 'two'),
+					key('http', 'codex', 'one'),
+					key('http', 'codex', 'two'),
 				],
 			};
 			const configPath = join(directory, 'config.json');
@@ -246,6 +298,112 @@ it.live(
 					expect(await transcript(provider, 'beta', 2)).toBe(firstB);
 				}
 				expect(seen).toHaveLength(24);
+				const stream = async (provider: 'claude' | 'codex', session: string, owner = 'alice') => {
+					const response = await fetch(
+						`${origin}/v1/${provider === 'claude' ? 'messages' : 'responses'}`,
+						{
+							method: 'POST',
+							headers: {
+								authorization: 'Bearer synthetic-editor',
+								'content-type': 'application/json',
+								[provider === 'claude' ? 'x-claude-code-session-id' : 'session_id']: session,
+							},
+							body: JSON.stringify({
+								model: `${owner}/${provider === 'claude' ? 'claude-sonnet-4-6' : 'gpt-5.5'}`,
+								...(provider === 'claude'
+									? { max_tokens: 8, messages: [{ role: 'user', content: 'synthetic retry' }] }
+									: { input: [{ role: 'user', content: 'synthetic retry' }] }),
+								stream: true,
+							}),
+							signal: AbortSignal.timeout(5_000),
+						},
+					);
+					return {
+						status: response.status,
+						headers: response.headers,
+						body: await response.text(),
+					};
+				};
+				for (const provider of ['claude', 'codex'] as const) {
+					const httpSession = `${provider}-http-retry`;
+					const httpOriginal = await post(provider, 'http', httpSession);
+					if (httpOriginal === undefined) throw new Error('No HTTP account selected');
+					failures.set(httpOriginal, 'quota');
+					let offset = seen.length;
+					const httpReplacement = await post(provider, 'http', httpSession);
+					expect(httpReplacement).not.toBe(httpOriginal);
+					expect(seen.slice(offset).map((attempt) => attempt.key)).toEqual([
+						httpOriginal,
+						httpReplacement,
+					]);
+					const bootstrapSession = `${provider}-bootstrap-retry`;
+					const bootstrapOriginal = await post(provider, 'bootstrap', bootstrapSession);
+					if (bootstrapOriginal === undefined) throw new Error('No bootstrap account selected');
+					failures.set(bootstrapOriginal, 'bootstrap');
+					offset = seen.length;
+					const bootstrapped = await stream(provider, bootstrapSession, 'bootstrap');
+					expect(bootstrapped.status, bootstrapped.body).toBe(200);
+					const bootstrapAttempts = seen.slice(offset).map((attempt) => attempt.key);
+					if (provider === 'claude') {
+						expect(bootstrapAttempts).toEqual([bootstrapOriginal]);
+						expect(bootstrapped.body).toContain('"type":"rate_limit_error"');
+					} else {
+						expect(bootstrapAttempts).toHaveLength(2);
+						expect(bootstrapAttempts[0]).toBe(bootstrapOriginal);
+						expect(bootstrapAttempts[1]).not.toBe(bootstrapOriginal);
+						expect(bootstrapped.body).toContain('synthetic');
+					}
+					failures.set(`synthetic-${provider}-exhausted-one`, 'quota');
+					failures.set(`synthetic-${provider}-exhausted-two`, 'quota');
+					offset = seen.length;
+					const emptyPool = await stream(provider, `${provider}-exhausted`, 'exhausted');
+					expect(emptyPool.status, emptyPool.body).toBe(429);
+					expect(
+						seen
+							.slice(offset)
+							.map((attempt) => attempt.key)
+							.toSorted(),
+					).toEqual([`synthetic-${provider}-exhausted-one`, `synthetic-${provider}-exhausted-two`]);
+					const session = `${provider}-quota-session`;
+					const original = await post(provider, 'alice', session);
+					if (original === undefined) throw new Error('No original account selected');
+					const replacement = `synthetic-${provider}-alice-${original.endsWith('one') ? 'two' : 'one'}`;
+					failures.set(original, 'quota');
+					offset = seen.length;
+					const recovered = await stream(provider, session);
+					expect(recovered.status, recovered.body).toBe(200);
+					expect(seen.slice(offset).map((attempt) => attempt.key)).toEqual([original, replacement]);
+					expect(await post(provider, 'alice', session)).toBe(replacement);
+					failures.set(replacement, 'quota');
+					offset = seen.length;
+					const exhausted = await stream(provider, session);
+					expect(exhausted.status, exhausted.body).toBe(429);
+					expect(seen.slice(offset).map((attempt) => attempt.key)).toEqual([replacement]);
+					offset = seen.length;
+					const cached = await stream(provider, session);
+					expect(cached.status, cached.body).toBe(429);
+					expect(Number(cached.headers.get('retry-after'))).toBeGreaterThan(0);
+					expect(seen).toHaveLength(offset);
+					failures.delete(original);
+					failures.delete(replacement);
+					const deadline = Date.now() + 45_000;
+					let available = cached;
+					while (available.status === 429 && Date.now() < deadline) {
+						await new Promise((done) => setTimeout(done, 250));
+						available = await stream(provider, session);
+					}
+					expect(available.status, available.body).toBe(200);
+					expect(seen).toHaveLength(offset + 1);
+					const active = seen.at(-1)?.key;
+					if (active === undefined) throw new Error('No recovered account selected');
+					failures.set(active, 'partial');
+					offset = seen.length;
+					const partial = await stream(provider, session);
+					expect(partial.status, partial.body).toBe(200);
+					expect(partial.body).toContain('partial output');
+					expect(seen.slice(offset).map((attempt) => attempt.key)).toEqual([active]);
+					failures.delete(active);
+				}
 			} finally {
 				if (containerId !== undefined) await run('docker', ['rm', '--force', containerId]);
 				server.closeAllConnections();
