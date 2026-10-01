@@ -64,6 +64,8 @@ it.live(
 			const readiness: ServerResponse[] = [];
 			const pacers = new Set<NodeJS.Timeout>();
 			let holdStartup = false;
+			let holdModels = false;
+			let freshModel = false;
 			const quotaCalls: unknown[] = [];
 
 			// Local workerd on Linux only notices a client that hung up when it next writes to that
@@ -83,6 +85,25 @@ it.live(
 
 			const server = createServer((request, response) => {
 				void (async () => {
+					if (request.url?.startsWith('/v0/management/auth-files/models?')) {
+						expect(request.headers.authorization).toBe('Bearer synthetic-management-key');
+						expect(new URL(request.url, 'http://fixture').searchParams.get('name')).toBe(
+							`alice__claude__${accountId(credential)}.json`,
+						);
+						response.setHeader('content-type', 'application/json');
+						response.end(
+							JSON.stringify({
+								models: holdModels
+									? []
+									: [
+											{ id: 'alice/claude-haiku-4-5-20251001' },
+											...(freshModel ? [{ id: 'alice/claude-fable-5-1' }] : []),
+										],
+							}),
+						);
+						events.emit('registry');
+						return;
+					}
 					if (request.url === '/v0/management/auth-files') {
 						expect(request.headers.authorization).toBe('Bearer synthetic-management-key');
 						response.setHeader('content-type', 'application/json');
@@ -207,7 +228,7 @@ it.live(
 				kvNamespaces: ['USERS'],
 				bindings: {
 					ADMIN_TOKEN_SHA256: adminDigest('admin-only'),
-					CLAUDE_MODELS: ['claude-haiku-4-5-20251001'],
+					CLAUDE_MODELS: ['claude-haiku-4-5-20251001', 'claude-fable-5-1'],
 					CPA_API_KEY: 'private-cpa-key',
 					CPA_MANAGEMENT_KEY: 'synthetic-management-key',
 					CODEX_MODELS: ['gpt-5.4'],
@@ -303,6 +324,7 @@ it.live(
 				await run('docker', ['stop', ...containerIds]);
 				mf = new Miniflare(options);
 				holdStartup = true;
+				holdModels = true;
 				const starting = once(events, 'startup', { signal: AbortSignal.timeout(20_000) });
 				const pending = post('tokens', '/claude/v1/messages/count_tokens');
 				await starting.catch((cause: unknown) => {
@@ -318,8 +340,14 @@ it.live(
 				holdStartup = false;
 
 				await new Promise((done) => setTimeout(done, 2100));
-				const readyBoundary = Date.now();
+				const registry = once(events, 'registry', { signal: AbortSignal.timeout(20_000) });
 				for (const response of readiness) response.end('ready');
+				expect(
+					await Promise.race([pending.then(() => 'inference'), registry.then(() => 'registry')]),
+				).toBe('registry');
+				expect(seen).toEqual([]);
+				const readyBoundary = Date.now();
+				holdModels = false;
 				const counted = await pending;
 				expect(counted.status).toBe(200);
 				expect(await counted.json()).toEqual({ input_tokens: 23 });
@@ -338,6 +366,52 @@ it.live(
 						mode: 'tokens',
 					},
 				]);
+				const missingModelBody = payload.replace('claude-haiku-4-5-20251001', 'claude-fable-5-1');
+				const attempts = seen.length;
+				const missingSince = Date.now();
+				const missingModel = await post('tokens', '/claude/v1/messages/count_tokens', {
+					body: missingModelBody,
+				});
+				expect(missingModel.status).toBe(503);
+				expect(await missingModel.json()).toEqual({ error: 'runtime_unavailable' });
+				expect(Date.now() - missingSince).toBeLessThan(35_000);
+				expect(seen).toHaveLength(attempts);
+				freshModel = true;
+				const refreshed = await post('tokens', '/claude/v1/messages/count_tokens', {
+					body: missingModelBody,
+				});
+				expect(refreshed.status).toBe(200);
+				expect(await refreshed.json()).toEqual({ input_tokens: 23 });
+				expect(seen).toHaveLength(attempts + 1);
+				const runningContainer = await run('docker', [
+					'ps',
+					'-q',
+					'--filter',
+					'ancestor=proxy-inference-fixture:test',
+				]);
+				await mf.dispose();
+				mf = new Miniflare(options);
+				holdModels = true;
+				const restoredRegistry = once(events, 'registry', { signal: AbortSignal.timeout(20_000) });
+				const restoredRequest = post('tokens', '/claude/v1/messages/count_tokens');
+				expect(
+					await Promise.race([
+						restoredRequest.then(() => 'inference'),
+						restoredRegistry.then(() => 'registry'),
+					]),
+				).toBe('registry');
+				expect(seen).toHaveLength(attempts + 1);
+				holdModels = false;
+				const restoredResponse = await restoredRequest;
+				expect(restoredResponse.status).toBe(200);
+				expect(await restoredResponse.json()).toEqual({ input_tokens: 23 });
+				const sameContainer = await run('docker', [
+					'ps',
+					'-q',
+					'--filter',
+					'ancestor=proxy-inference-fixture:test',
+				]);
+				expect(sameContainer.stdout.trim()).toBe(runningContainer.stdout.trim());
 
 				const errored = await post('error');
 				expect(errored.status).toBe(429);
@@ -405,6 +479,8 @@ it.live(
 				mf = new Miniflare(options);
 				expect((await post('tokens')).status).toBe(503);
 				expect(seen.map(({ mode }) => mode)).toEqual([
+					'tokens',
+					'tokens',
 					'tokens',
 					'error',
 					'cancel',

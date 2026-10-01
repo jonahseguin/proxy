@@ -25,6 +25,10 @@ const stateKey = (id: string, provider: Provider) => `account-state:${id}:${prov
 const gateKey = 'runtime-gate';
 const startedKey = 'runtime-started-at';
 const QuotaResponse = Schema.Struct({ status_code: Schema.Number, body: Schema.String });
+const RegisteredModels = Schema.Struct({
+	models: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString })),
+});
+const RequestedModel = Schema.Struct({ model: Schema.NonEmptyString });
 
 export class ProxyContainer extends Container<Env> {
 	defaultPort = 8317;
@@ -32,6 +36,7 @@ export class ProxyContainer extends Container<Env> {
 	private busy = false;
 	private reading = 0;
 	private starting: Promise<void> | null = null;
+	private registeredModels: Set<string> | null = null;
 	private quotaCache = new Map<
 		string,
 		{ expires: number; usage: Pick<AccountUsage, 'quotaState' | 'windows' | 'observedAt'> }
@@ -39,10 +44,13 @@ export class ProxyContainer extends Container<Env> {
 
 	override async onStop(): Promise<void> {
 		await this.ctx.storage.delete(startedKey);
+		this.registeredModels = null;
 		this.quotaCache.clear();
 	}
 
 	private async startRuntime(): Promise<void> {
+		this.registeredModels = null;
+		await this.ctx.storage.delete(startedKey);
 		await this.env.CREDENTIALS.put(
 			'config/config.yaml',
 			JSON.stringify({
@@ -88,8 +96,56 @@ export class ProxyContainer extends Container<Env> {
 				},
 			},
 		});
+		await this.waitForModels();
 		await this.ctx.storage.put(startedKey, new Date().toISOString());
 		this.quotaCache.clear();
+	}
+
+	private async waitForModels(model?: string, requestSignal?: AbortSignal): Promise<void> {
+		const signal = AbortSignal.any([
+			AbortSignal.timeout(30_000),
+			...(requestSignal === undefined ? [] : [requestSignal]),
+		]);
+		const names: string[] = [];
+		let cursor: string | undefined;
+		do {
+			signal.throwIfAborted();
+			const listed = await this.env.CREDENTIALS.list({
+				prefix: 'auths/',
+				...(cursor === undefined ? {} : { cursor }),
+			});
+			for (const object of listed.objects) names.push(object.key.slice('auths/'.length));
+			cursor = listed.truncated ? listed.cursor : undefined;
+		} while (cursor !== undefined);
+		for (;;) {
+			signal.throwIfAborted();
+			try {
+				const snapshots = await Promise.all(
+					names.map(async (name) =>
+						Schema.decodeUnknownSync(RegisteredModels)(
+							await this.management(
+								`/v0/management/auth-files/models?name=${encodeURIComponent(name)}`,
+								undefined,
+								signal,
+							),
+						),
+					),
+				);
+				const registered = new Set(
+					snapshots.flatMap((snapshot) => snapshot.models.map((item) => item.id)),
+				);
+				if (
+					snapshots.every((snapshot) => snapshot.models.length > 0) &&
+					(model === undefined || registered.has(model))
+				) {
+					this.registeredModels = registered;
+					return;
+				}
+			} catch {
+				signal.throwIfAborted();
+			}
+			await new Promise((done) => setTimeout(done, 100));
+		}
 	}
 
 	private ports(user: string, provider?: Provider) {
@@ -135,6 +191,7 @@ export class ProxyContainer extends Container<Env> {
 				},
 				stop: async () => {
 					await this.destroy();
+					this.registeredModels = null;
 					this.quotaCache.clear();
 				},
 				load: async () => {
@@ -146,11 +203,15 @@ export class ProxyContainer extends Container<Env> {
 	}
 
 	private async management(
-		path: '/v0/management/auth-files' | '/v0/management/api-call',
+		path:
+			| '/v0/management/auth-files'
+			| '/v0/management/api-call'
+			| `/v0/management/auth-files/models?name=${string}`,
 		body?: unknown,
+		signal?: AbortSignal,
 	): Promise<unknown> {
 		const container = this.ctx.container;
-		if (!container?.running || this.busy) throw new Error('Runtime unavailable');
+		if (!container?.running) throw new Error('Runtime unavailable');
 		const response = await container.getTcpPort(this.defaultPort).fetch(
 			new Request(`http://cpa.internal${path}`, {
 				method: body === undefined ? 'GET' : 'POST',
@@ -159,7 +220,10 @@ export class ProxyContainer extends Container<Env> {
 					'content-type': 'application/json',
 				},
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
-				signal: AbortSignal.timeout(10_000),
+				signal: AbortSignal.any([
+					AbortSignal.timeout(10_000),
+					...(signal === undefined ? [] : [signal]),
+				]),
 				redirect: 'manual',
 			}),
 		);
@@ -264,10 +328,13 @@ export class ProxyContainer extends Container<Env> {
 				return Response.json({ error: 'account_unavailable' }, { status: 503 });
 			this.starting ??= (async () => {
 				if (!this.ctx.container?.running) await this.startRuntime();
+				else if (this.registeredModels === null) await this.waitForModels();
 			})().finally(() => {
 				this.starting = null;
 			});
 			await this.starting;
+			const { model } = Schema.decodeUnknownSync(RequestedModel)(await request.clone().json());
+			if (!this.registeredModels?.has(model)) await this.waitForModels(model, request.signal);
 			if (this.busy) return Response.json({ error: 'account_busy' }, { status: 409 });
 			const container = this.ctx.container;
 			if (!container?.running)
