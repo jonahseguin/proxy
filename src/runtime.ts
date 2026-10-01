@@ -18,6 +18,7 @@ import {
 	type AccountUsage,
 } from './account.ts';
 import { allAccountsPath, BodyError, inferencePath, readBody, userHeader } from './gateway.ts';
+import { runtimeFailure } from './logging.ts';
 import { accountMetrics, quotaRequest, quotaWindows } from './metrics.ts';
 import { isUserId } from './users.ts';
 
@@ -49,102 +50,123 @@ export class ProxyContainer extends Container<Env> {
 	}
 
 	private async startRuntime(): Promise<void> {
-		this.registeredModels = null;
-		await this.ctx.storage.delete(startedKey);
-		await this.env.CREDENTIALS.put(
-			'config/config.yaml',
-			JSON.stringify({
-				host: '',
-				port: 8317,
-				'api-keys': [this.env.CPA_API_KEY],
-				'request-log': false,
-				'logging-to-file': false,
-				'usage-statistics-enabled': false,
-				debug: false,
-				'request-retry': 0,
-				'max-retry-credentials': 0,
-				'max-retry-interval': 0,
-				streaming: { 'bootstrap-retries': 0 },
-				'quota-exceeded': {
-					'switch-project': false,
-					'switch-preview-model': false,
-					'antigravity-credits': false,
+		let stage = 'startup-storage';
+		try {
+			this.registeredModels = null;
+			await this.ctx.storage.delete(startedKey);
+			await this.env.CREDENTIALS.put(
+				'config/config.yaml',
+				JSON.stringify({
+					host: '',
+					port: 8317,
+					'api-keys': [this.env.CPA_API_KEY],
+					'request-log': false,
+					'logging-to-file': false,
+					'usage-statistics-enabled': false,
+					debug: false,
+					'request-retry': 0,
+					'max-retry-credentials': 0,
+					'max-retry-interval': 0,
+					streaming: { 'bootstrap-retries': 0 },
+					'quota-exceeded': {
+						'switch-project': false,
+						'switch-preview-model': false,
+						'antigravity-credits': false,
+					},
+					'oauth-model-alias': {},
+					'force-model-prefix': true,
+					routing: {
+						strategy: 'round-robin',
+						'session-affinity': true,
+						'session-affinity-ttl': '1h',
+					},
+					'remote-management': {
+						'allow-remote': true,
+						'secret-key': this.env.CPA_MANAGEMENT_KEY,
+						'disable-control-panel': true,
+						'disable-auto-update-panel': true,
+					},
+				}),
+			);
+			stage = 'startup-ports';
+			await this.startAndWaitForPorts({
+				ports: [8317],
+				startOptions: {
+					envVars: {
+						OBJECTSTORE_ENDPOINT: this.env.OBJECTSTORE_ENDPOINT,
+						OBJECTSTORE_BUCKET: this.env.OBJECTSTORE_BUCKET,
+						OBJECTSTORE_ACCESS_KEY: this.env.OBJECTSTORE_ACCESS_KEY,
+						OBJECTSTORE_SECRET_KEY: this.env.OBJECTSTORE_SECRET_KEY,
+					},
 				},
-				'oauth-model-alias': {},
-				'force-model-prefix': true,
-				routing: {
-					strategy: 'round-robin',
-					'session-affinity': true,
-					'session-affinity-ttl': '1h',
-				},
-				'remote-management': {
-					'allow-remote': true,
-					'secret-key': this.env.CPA_MANAGEMENT_KEY,
-					'disable-control-panel': true,
-					'disable-auto-update-panel': true,
-				},
-			}),
-		);
-		await this.startAndWaitForPorts({
-			ports: [8317],
-			startOptions: {
-				envVars: {
-					OBJECTSTORE_ENDPOINT: this.env.OBJECTSTORE_ENDPOINT,
-					OBJECTSTORE_BUCKET: this.env.OBJECTSTORE_BUCKET,
-					OBJECTSTORE_ACCESS_KEY: this.env.OBJECTSTORE_ACCESS_KEY,
-					OBJECTSTORE_SECRET_KEY: this.env.OBJECTSTORE_SECRET_KEY,
-				},
-			},
-		});
-		await this.waitForModels();
-		await this.ctx.storage.put(startedKey, new Date().toISOString());
-		this.quotaCache.clear();
+			});
+			stage = 'startup-models';
+			await this.waitForModels();
+			stage = 'startup-timestamp';
+			await this.ctx.storage.put(startedKey, new Date().toISOString());
+			this.quotaCache.clear();
+		} catch (error) {
+			runtimeFailure(stage, error);
+			throw error;
+		}
 	}
 
 	private async waitForModels(model?: string, requestSignal?: AbortSignal): Promise<void> {
-		const signal = AbortSignal.any([
-			AbortSignal.timeout(30_000),
-			...(requestSignal === undefined ? [] : [requestSignal]),
-		]);
-		const names: string[] = [];
-		let cursor: string | undefined;
-		do {
-			signal.throwIfAborted();
-			const listed = await this.env.CREDENTIALS.list({
-				prefix: 'auths/',
-				...(cursor === undefined ? {} : { cursor }),
-			});
-			for (const object of listed.objects) names.push(object.key.slice('auths/'.length));
-			cursor = listed.truncated ? listed.cursor : undefined;
-		} while (cursor !== undefined);
-		for (;;) {
-			signal.throwIfAborted();
-			try {
-				const snapshots = await Promise.all(
-					names.map(async (name) =>
-						Schema.decodeUnknownSync(RegisteredModels)(
-							await this.management(
-								`/v0/management/auth-files/models?name=${encodeURIComponent(name)}`,
-								undefined,
-								signal,
+		let stage = 'model-signal-create';
+		try {
+			const signal = AbortSignal.any([
+				AbortSignal.timeout(30_000),
+				...(requestSignal === undefined ? [] : [requestSignal]),
+			]);
+			const names: string[] = [];
+			let cursor: string | undefined;
+			do {
+				stage = 'model-signal-check';
+				signal.throwIfAborted();
+				stage = 'model-credential-list';
+				const listed = await this.env.CREDENTIALS.list({
+					prefix: 'auths/',
+					...(cursor === undefined ? {} : { cursor }),
+				});
+				stage = 'model-credential-list-result';
+				for (const object of listed.objects) names.push(object.key.slice('auths/'.length));
+				cursor = listed.truncated ? listed.cursor : undefined;
+			} while (cursor !== undefined);
+			for (;;) {
+				stage = 'model-signal-check';
+				signal.throwIfAborted();
+				try {
+					const snapshots = await Promise.all(
+						names.map(async (name) =>
+							Schema.decodeUnknownSync(RegisteredModels)(
+								await this.management(
+									`/v0/management/auth-files/models?name=${encodeURIComponent(name)}`,
+									undefined,
+									signal,
+								),
 							),
 						),
-					),
-				);
-				const registered = new Set(
-					snapshots.flatMap((snapshot) => snapshot.models.map((item) => item.id)),
-				);
-				if (
-					snapshots.every((snapshot) => snapshot.models.length > 0) &&
-					(model === undefined || registered.has(model))
-				) {
-					this.registeredModels = registered;
-					return;
+					);
+					const registered = new Set(
+						snapshots.flatMap((snapshot) => snapshot.models.map((item) => item.id)),
+					);
+					if (
+						snapshots.every((snapshot) => snapshot.models.length > 0) &&
+						(model === undefined || registered.has(model))
+					) {
+						this.registeredModels = registered;
+						return;
+					}
+				} catch {
+					stage = 'model-signal-check';
+					signal.throwIfAborted();
 				}
-			} catch {
-				signal.throwIfAborted();
+				stage = 'model-poll-wait';
+				await new Promise((done) => setTimeout(done, 100));
 			}
-			await new Promise((done) => setTimeout(done, 100));
+		} catch (error) {
+			runtimeFailure(stage, error);
+			throw error;
 		}
 	}
 
@@ -320,6 +342,7 @@ export class ProxyContainer extends Container<Env> {
 	): Promise<Response> {
 		if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 		if (this.busy) return Response.json({ error: 'account_busy' }, { status: 409 });
+		let stage = 'account-state';
 		try {
 			if (
 				(await this.ctx.storage.get(stateKey(user, provider))) !== 'saved' ||
@@ -332,8 +355,11 @@ export class ProxyContainer extends Container<Env> {
 			})().finally(() => {
 				this.starting = null;
 			});
+			stage = 'runtime-readiness';
 			await this.starting;
+			stage = 'requested-model';
 			const { model } = Schema.decodeUnknownSync(RequestedModel)(await request.clone().json());
+			stage = 'model-readiness';
 			if (!this.registeredModels?.has(model)) await this.waitForModels(model, request.signal);
 			if (this.busy) return Response.json({ error: 'account_busy' }, { status: 409 });
 			const container = this.ctx.container;
@@ -352,6 +378,7 @@ export class ProxyContainer extends Container<Env> {
 				redirect: 'manual',
 			});
 			this.renewActivityTimeout();
+			stage = 'generation-forward';
 			const response = await container.getTcpPort(this.defaultPort).fetch(upstream);
 			if (response.body === null) return response;
 			const reader = response.body.getReader();
@@ -387,7 +414,8 @@ export class ProxyContainer extends Container<Env> {
 				},
 			});
 			return new Response(body, response);
-		} catch {
+		} catch (error) {
+			runtimeFailure(stage, error);
 			return Response.json({ error: 'runtime_unavailable' }, { status: 503 });
 		}
 	}

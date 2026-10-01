@@ -19,7 +19,13 @@ export default defineConfig({
 		entrypoint: 'src/index.ts',
 		workersDev: true,
 		previewUrls: false,
-		observability: { enabled: false },
+		observability: {
+			enabled: true,
+			redactQueryString: true,
+			logs: { enabled: true, invocationLogs: false, persist: true, headSamplingRate: 1 },
+			traces: { enabled: false },
+			issues: { enabled: false },
+		},
 		exports: { ProxyContainer: exports.durableObject({ storage: 'sqlite', container: proxy }) },
 		env: {
 			CLAUDE_MODELS: bindings.json(['claude-fable-5-1', 'claude-opus-5', 'claude-opus-5-5']),
