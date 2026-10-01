@@ -7,6 +7,7 @@ const proxy = defineContainer({
 	image: { dockerfile: './Dockerfile' },
 	instanceType: 'lite',
 	maxInstances: 1,
+	observability: { logs: { enabled: false } },
 });
 
 export default defineConfig({

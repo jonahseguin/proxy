@@ -134,7 +134,7 @@ CPA startup settings take effect when the container starts. After changing those
 
 Before forwarding generation, the Worker verifies CPA has registered the saved accounts and requested model. Each registration check has a 30-second deadline. An open container port alone does not mark the runtime ready.
 
-Worker error logs persist fixed operation stages, error names, recognized platform messages, and compiled source locations. Other error text is omitted. Invocation logs and traces are disabled; application logs contain no prompts, credentials, account filenames, or request details.
+Worker error logs persist fixed operation stages, error names, recognized platform messages, and compiled source locations. Other error text is omitted. Invocation logs, traces, and container logs are disabled; application logs contain no prompts, credentials, account filenames, or request details.
 
 Keys use OS credential-store services `jonah.proxy.admin`, `jonah.proxy.editor`, and `jonah.proxy.user.<id>`, indexed by origin. The login-helper cache is `~/.cache/jonah.proxy` (or `$XDG_CACHE_HOME/jonah.proxy`). Provider OAuth credentials are private R2 objects.
 
