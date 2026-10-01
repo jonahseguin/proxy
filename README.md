@@ -65,6 +65,8 @@ Create a **Custom URL** connection for each provider you want to route through t
 
 Use `proxy join` to see the current model list and complete mappings. In Amp, map its model IDs to the names returned by the proxy, then choose those models for your modes. Only configured models are accepted. If you prefer Amp's native ChatGPT sign-in, configure only the Claude connection here.
 
+The Codex model list includes the native `gpt-6.1-sol` ID. Its Amp mapping is `openai/gpt-6.1-sol` → `gpt-6.1-sol`.
+
 To print your editor key in a private terminal:
 
 ```sh
@@ -128,6 +130,10 @@ cf deploy --secrets-file /path/to/protected-secrets.json
 
 Do not commit the secret file. Remove it after successful deployment. Routine code updates use `bun run deploy`, preserving deployed secrets.
 
+CPA startup settings take effect when the container starts. After changing those settings, use a Cloudflare container rollout or restart after deploying the Worker. A Worker deployment can leave the existing CPA process running. Verify the replacement uses the new settings and retains the saved accounts.
+
+Before forwarding generation, the Worker verifies CPA has registered the saved accounts and requested model. Each registration check has a 30-second deadline. An open container port alone does not mark the runtime ready.
+
 Keys use OS credential-store services `jonah.proxy.admin`, `jonah.proxy.editor`, and `jonah.proxy.user.<id>`, indexed by origin. The login-helper cache is `~/.cache/jonah.proxy` (or `$XDG_CACHE_HOME/jonah.proxy`). Provider OAuth credentials are private R2 objects.
 
 ## Verification and limits
@@ -143,6 +149,8 @@ bun run test:runtime
 Runtime tests require Docker and synthetic credentials; they do not prove live subscription access. Account login and real provider requests are separate verification steps.
 
 The pinned CPA image and its Claude and Codex executors were tested with two synthetic static-key accounts per provider against local upstream fixtures. Within that running process, new recognized sessions alternate accounts, repeated sessions keep their selected account, and another user's matching session stays in that user's pool. Both providers also kept each account across interleaved growing conversations without session IDs. The Worker and container tests also cover account replacement and deletion, restart recovery, streamed tool data, and cancellation.
+
+Native CPA tests also cover HTTP and stream quota failures before output, each eligible account attempted once, exhausted pools returning an error, cooldown expiry, and sessions keeping their replacement. They verify that a failure after streamed output does not replay the request.
 
 The deployment at `https://proxy.jonahseguin.workers.dev` passed hosted checks on October 1, 2026: public health, rejected unauthorized requests, private CPA routes, authenticated model discovery, account collections, and status. After OAuth login, Claude Fable 5.1 and GPT-6 Luna passed live text and tool streaming checks. Provider quota windows were observed. Actual Amp medium and high turns passed through Claude Opus 5.5 and GPT-6 Astra; follow-ups stayed on their selected accounts. One Claude account returned HTTP 429 while the other continued working, so account health and real request results matter alongside quota percentages.
 

@@ -24,6 +24,7 @@ export default defineConfig({
 		env: {
 			CLAUDE_MODELS: bindings.json(['claude-fable-5-1', 'claude-opus-5', 'claude-opus-5-5']),
 			CODEX_MODELS: bindings.json([
+				'gpt-6.1-sol',
 				'gpt-6-astra',
 				'gpt-6-sol',
 				'gpt-6-luna',
