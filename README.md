@@ -138,7 +138,7 @@ bun run test:runtime
 
 Runtime tests require Docker and synthetic credentials; they do not prove live subscription access. Account login and real provider requests are separate verification steps.
 
-The pinned CPA image and its Claude and Codex executors were tested with two synthetic static-key accounts per provider against local upstream fixtures. Within that running process, new recognized sessions alternate accounts, repeated sessions keep their selected account, and another user's matching session stays in that user's pool. The Worker and container tests also cover account replacement and deletion, restart recovery, streamed tool data, and cancellation.
+The pinned CPA image and its Claude and Codex executors were tested with two synthetic static-key accounts per provider against local upstream fixtures. Within that running process, new recognized sessions alternate accounts, repeated sessions keep their selected account, and another user's matching session stays in that user's pool. Both providers also kept each account across interleaved growing conversations without session IDs. The Worker and container tests also cover account replacement and deletion, restart recovery, streamed tool data, and cancellation.
 
 The deployment at `https://proxy.jonahseguin.workers.dev` passed hosted checks on October 1, 2026: public health, rejected unauthorized requests, private CPA routes, authenticated model discovery, empty account collections, and status. Real OAuth login, live provider generation, and provider quota values remain unverified until accounts are connected.
 

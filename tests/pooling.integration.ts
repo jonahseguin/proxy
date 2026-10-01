@@ -181,7 +181,71 @@ it.live(
 						`synthetic-${provider}-bob-one`,
 					);
 				}
-				expect(seen).toHaveLength(12);
+				const transcript = async (provider: 'claude' | 'codex', thread: string, turns: number) => {
+					const messages = [
+						{ role: 'user', content: `Review ${thread}.ts and explain its imports.` },
+					];
+					for (let turn = 0; turn < turns; turn++)
+						messages.push(
+							{ role: 'assistant', content: `synthetic review ${thread} turn ${turn}` },
+							{ role: 'user', content: `Continue ${thread} review with step ${turn + 1}.` },
+						);
+					const system = 'You review code carefully. Preserve the full conversation history.';
+					const response = await fetch(
+						`${origin}/v1/${provider === 'claude' ? 'messages' : 'responses'}`,
+						{
+							method: 'POST',
+							headers: {
+								authorization: 'Bearer synthetic-editor',
+								'content-type': 'application/json',
+							},
+							body: JSON.stringify(
+								provider === 'claude'
+									? {
+											model: 'alice/claude-sonnet-4-6',
+											max_tokens: 1,
+											system,
+											messages: messages.map((message) => ({
+												...message,
+												content: [{ type: 'text', text: message.content }],
+											})),
+										}
+									: {
+											model: 'alice/gpt-5.5',
+											instructions: system,
+											input: messages.map((message) => ({
+												...message,
+												type: 'message',
+												content: [
+													{
+														type: message.role === 'assistant' ? 'output_text' : 'input_text',
+														text: message.content,
+													},
+												],
+											})),
+											stream: false,
+										},
+							),
+						},
+					);
+					expect(
+						response.status,
+						`${provider} ${thread} turn ${turns}: ${await response.text()}`,
+					).toBe(200);
+					return seen.at(-1)?.key;
+				};
+				for (const provider of ['claude', 'codex'] as const) {
+					const firstA = await transcript(provider, 'alpha', 0);
+					const firstB = await transcript(provider, 'beta', 0);
+					expect(firstA).not.toBe(firstB);
+					expect(firstA).toMatch(new RegExp(`^synthetic-${provider}-alice-`));
+					expect(firstB).toMatch(new RegExp(`^synthetic-${provider}-alice-`));
+					expect(await transcript(provider, 'alpha', 1)).toBe(firstA);
+					expect(await transcript(provider, 'beta', 1)).toBe(firstB);
+					expect(await transcript(provider, 'alpha', 2)).toBe(firstA);
+					expect(await transcript(provider, 'beta', 2)).toBe(firstB);
+				}
+				expect(seen).toHaveLength(24);
 			} finally {
 				if (containerId !== undefined) await run('docker', ['rm', '--force', containerId]);
 				server.closeAllConnections();
