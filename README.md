@@ -45,6 +45,10 @@ Status shows saved identities, runtime/account health, time since CPA became rea
 
 Account selection depends on the session information sent by the editor. When an editor omits a session ID, CPA compares earlier messages to select the account. Rewritten or compacted context can select another account. Live Amp tests with Claude Opus 5.5 and GPT-6 Astra confirmed that successive turns in each thread used the same account.
 
+On a quota rejection before streaming starts, CPA tries the remaining eligible accounts for the same user, provider, and model. It tries each credential once in that initial selection round. It does not wait for a cooldown, repeat the round, or restart an already-started stream. If no account can serve the request, the caller receives an error.
+
+CPA makes an account eligible again when its provider cooldown expires. `proxy status` shows retry and quota reset times; quota observations may be cached for 30 seconds. No manual reset or reconnect is needed for a quota cooldown. Reconnect only when the saved credential needs replacing.
+
 Adding, reconnecting, or removing an account restarts the shared container and interrupts active streams. Removal is confirmed only after durable deletion. Failed account mutations keep the affected account pool blocked until recovery succeeds.
 
 ## Amp
