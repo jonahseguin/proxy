@@ -43,7 +43,7 @@ Use the full account ID printed by `list` or `status`. To specify another deploy
 
 Status shows saved identities, runtime/account health, time since CPA became ready, available provider usage windows and their reset times. Missing usage is reported as unavailable, never as zero usage. Request counts cover the current CPA process, not account history. A saved credential does not by itself prove that the provider will accept inference.
 
-Account selection depends on the session information sent by the editor. When an editor omits a session ID, CPA compares earlier messages to select the account. Rewritten or compacted context can select another account. Amp's actual requests have not yet been checked against connected OAuth accounts, so this deployment does not guarantee that an Amp thread keeps one account or reuses its provider cache.
+Account selection depends on the session information sent by the editor. When an editor omits a session ID, CPA compares earlier messages to select the account. Rewritten or compacted context can select another account. Live Amp tests with Claude Opus 5.5 and GPT-6 Astra confirmed that successive turns in each thread used the same account.
 
 Adding, reconnecting, or removing an account restarts the shared container and interrupts active streams. Removal is confirmed only after durable deletion. Failed account mutations keep the affected account pool blocked until recovery succeeds.
 
@@ -140,7 +140,7 @@ Runtime tests require Docker and synthetic credentials; they do not prove live s
 
 The pinned CPA image and its Claude and Codex executors were tested with two synthetic static-key accounts per provider against local upstream fixtures. Within that running process, new recognized sessions alternate accounts, repeated sessions keep their selected account, and another user's matching session stays in that user's pool. Both providers also kept each account across interleaved growing conversations without session IDs. The Worker and container tests also cover account replacement and deletion, restart recovery, streamed tool data, and cancellation.
 
-The deployment at `https://proxy.jonahseguin.workers.dev` passed hosted checks on October 1, 2026: public health, rejected unauthorized requests, private CPA routes, authenticated model discovery, empty account collections, and status. Real OAuth login, live provider generation, and provider quota values remain unverified until accounts are connected.
+The deployment at `https://proxy.jonahseguin.workers.dev` passed hosted checks on October 1, 2026: public health, rejected unauthorized requests, private CPA routes, authenticated model discovery, account collections, and status. After OAuth login, Claude Fable 5.1 and GPT-6 Luna passed live text and tool streaming checks. Provider quota windows were observed. Actual Amp medium and high turns passed through Claude Opus 5.5 and GPT-6 Astra; follow-ups stayed on their selected accounts. One Claude account returned HTTP 429 while the other continued working, so account health and real request results matter alongside quota percentages.
 
 The inherited CPA storage limitation remains: a failed token-refresh upload followed by container disk loss can restore an older credential. If that token no longer works, reconnect that account. Keep one active CPA writer for the credential bucket. See [the credential durability decision](docs/adr/0002-credential-durability-gate.md).
 
