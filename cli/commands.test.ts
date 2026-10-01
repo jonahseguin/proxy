@@ -770,7 +770,7 @@ it.effect('status reports available usage and unavailable quota without inventin
 		values.set(`jonah.proxy.editor:${origin}`, 'a'.repeat(64));
 		const result = yield* runCli(['status', origin], dependencies);
 		expect(result).toContain('Proxy: running');
-		expect(result).toContain('Uptime: 1h 1m 1s; started 2026-10-01T12:00:00Z');
+		expect(result).toContain('Ready for: 1h 1m 1s; ready since 2026-10-01T12:00:00Z');
 		expect(result).toContain('five_hour: 40% used; resets 2026-10-01T15:00:00Z');
 		expect(result).toContain('Requests since 2026-10-01T12:00:00Z: 3 succeeded, 1 failed');
 		expect(result).toContain('Subscription quota: unavailable');

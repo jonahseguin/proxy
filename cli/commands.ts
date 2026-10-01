@@ -455,7 +455,7 @@ const statusCommand = Effect.fn('CLI.status')(function* (
 	const status = yield* decodeJson(ProxyStatus)(response);
 	return [
 		`Proxy: ${status.runtime.state}`,
-		`Uptime: ${status.runtime.uptimeSeconds === undefined ? 'unavailable' : `${Math.floor(status.runtime.uptimeSeconds / 3600)}h ${Math.floor((status.runtime.uptimeSeconds % 3600) / 60)}m ${status.runtime.uptimeSeconds % 60}s`}${status.runtime.startedAt ? `; started ${status.runtime.startedAt}` : ''}`,
+		`Ready for: ${status.runtime.uptimeSeconds === undefined ? 'unavailable' : `${Math.floor(status.runtime.uptimeSeconds / 3600)}h ${Math.floor((status.runtime.uptimeSeconds % 3600) / 60)}m ${status.runtime.uptimeSeconds % 60}s`}${status.runtime.startedAt ? `; ready since ${status.runtime.startedAt}` : ''}`,
 		`Checked: ${status.observedAt}`,
 		describeAccount(status.providers.claude, 'claude'),
 		describeAccount(status.providers.codex, 'codex'),
