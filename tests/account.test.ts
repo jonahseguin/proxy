@@ -164,3 +164,33 @@ it.effect('does not disclose tokens or arbitrary CPA metadata in account status'
 		expect(JSON.stringify(status)).not.toContain('synthetic-refresh');
 	}),
 );
+
+it.effect('removes both provider pools and keeps another owner with a similar id intact', () =>
+	Effect.gen(function* () {
+		const f = fixture();
+		const claude = yield* decodeCredential(synthetic, 'claude');
+		const codex = yield* decodeCredential(
+			{
+				type: 'codex',
+				id_token: 'synthetic-id',
+				access_token: 'synthetic-access',
+				refresh_token: 'synthetic-refresh',
+				email: synthetic.email,
+				account_id: 'chatgpt-account',
+				expired: synthetic.expired,
+			},
+			'codex',
+		);
+		for (const [owner, credential] of [
+			['alice', claude],
+			['alice', codex],
+			['alice-team', claude],
+		] as const)
+			yield* replaceAccount(owner, credential.type, { credential }).pipe(Effect.provide(f.ports));
+		const deleted = yield* Account.removeUserAccounts('alice').pipe(Effect.provide(f.ports));
+		expect(deleted).toEqual({ state: 'disconnected', accounts: [] });
+		expect([...f.stored.keys()]).toEqual([
+			credentialKey('alice-team', 'claude', accountId(claude)),
+		]);
+	}),
+);
