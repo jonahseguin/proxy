@@ -146,9 +146,16 @@ bun run lint
 bun run test
 bun run format:check
 bun run test:runtime
+bun run test:request-size
 ```
 
 Runtime tests require Docker and synthetic credentials; they do not prove live subscription access. Account login and real provider requests are separate verification steps.
+
+Inference requests accept up to 32 MiB of incoming UTF-8 JSON, including base64 images and conversation history. The gateway validates JSON incrementally and keeps only the rewritten body, capped at 33 MiB for serialization overhead. It rejects duplicate root `model` fields, models longer than 256 characters, and nesting deeper than 128 levels. Credential and administrator limits remain separate. Provider limits still apply.
+
+Each Worker isolate holds at most 64 MiB of inference body pages across requests. A full body budget returns a temporary 503; an oversized request returns 413. Pages are released when consumed, cancelled, or rejected. The private runtime receives the validated model as internal metadata and streams the body without parsing it again.
+
+The request-size test uses real workerd with a 128 MiB V8 heap limit and a local upstream fixture. It checks 32 MiB ASCII/base64-shaped and multibyte requests, dense JSON, exact byte limits, and cancellation. This heap setting does not measure total isolate memory.
 
 The pinned CPA image and its Claude and Codex executors were tested with two synthetic static-key accounts per provider against local upstream fixtures. Within that running process, new recognized sessions alternate accounts, repeated sessions keep their selected account, and another user's matching session stays in that user's pool. Both providers also kept each account across interleaved growing conversations without session IDs. The Worker and container tests also cover account replacement and deletion, restart recovery, streamed tool data, and cancellation.
 
@@ -161,6 +168,7 @@ The inherited CPA storage limitation remains: a failed token-refresh upload foll
 | Path                               | Purpose                                                            |
 | ---------------------------------- | ------------------------------------------------------------------ |
 | `src/gateway.ts`                   | Authentication, provider routes, model and request-size validation |
+| `src/inference-body.ts`            | Incremental JSON validation and bounded body storage               |
 | `src/runtime.ts`                   | Private CPA container, account changes, status and forwarding      |
 | `src/account.ts`                   | Provider identities and account collections                        |
 | `cli/`                             | Login, keys, accounts, usage and editor setup                      |

@@ -43,6 +43,82 @@ const proxy = (
 	forward: (value: Request) => Promise<Response> = async () => new Response('unexpected'),
 ) => layer(policy, users, forward);
 
+it.effect('forwards a valid base64-shaped inference body larger than 8 MiB', () =>
+	Effect.gen(function* () {
+		const data = 'A'.repeat(9 * 1024 * 1024);
+		const response = yield* handleRequest(
+			request('/claude/v1/messages', {
+				method: 'POST',
+				apiKey: 'alice-key',
+				body: JSON.stringify({ model: 'claude-sonnet-4-6', data }),
+			}),
+		);
+		expect(response.status).toBe(200);
+	}).pipe(
+		Effect.provide(
+			proxy(Users.testLayer({ alice: 'alice-key' }), async (incoming) => {
+				const body = (await incoming.json()) as { model: string; data: string };
+				expect(body.model).toBe('alice/claude-sonnet-4-6');
+				expect(body.data.length).toBe(9 * 1024 * 1024);
+				return new Response('accepted');
+			}),
+		),
+	),
+);
+
+it.effect('rejects unauthorized uploads before reading their body', () =>
+	Effect.gen(function* () {
+		let pulled = 0;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull() {
+					pulled++;
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		const response = yield* handleRequest(
+			new Request('http://proxy.test/codex/v1/responses', {
+				method: 'POST',
+				body,
+				duplex: 'half',
+			} as RequestInit),
+		);
+		expect(response.status).toBe(401);
+		expect(pulled).toBe(0);
+	}).pipe(Effect.provide(proxy(Users.testLayer({ alice: 'alice-key' })))),
+);
+
+it.effect('cancels malformed chunked JSON before reading the remaining upload', () =>
+	Effect.gen(function* () {
+		let pulled = 0;
+		let cancelled = false;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					pulled++;
+					controller.enqueue(new TextEncoder().encode('{invalid' + 'A'.repeat(8192)));
+				},
+				cancel() {
+					cancelled = true;
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		const response = yield* handleRequest(
+			new Request('http://proxy.test/codex/v1/responses', {
+				method: 'POST',
+				headers: { authorization: 'Bearer alice-key' },
+				body,
+				duplex: 'half',
+			} as RequestInit),
+		);
+		expect(response.status).toBe(400);
+		expect(pulled).toBe(1);
+		expect(cancelled).toBe(true);
+	}).pipe(Effect.provide(proxy(Users.testLayer({ alice: 'alice-key' })))),
+);
+
 it.effect('rejects wrong keys, models, methods, and routes without reaching the runtime', () => {
 	let forwarded = 0;
 
@@ -375,6 +451,7 @@ it.effect(
 						cookie: 'private-cookie',
 						'x-goog-api-key': 'wrong-key',
 						'x-proxy-user': 'alice',
+						'x-proxy-model': 'alice/other',
 						'anthropic-version': '2023-06-01',
 						'anthropic-beta': 'test-beta',
 					},
@@ -401,6 +478,7 @@ it.effect(
 							'anthropic-version': '2023-06-01',
 							'content-type': 'application/json',
 							'x-proxy-user': 'bob',
+							'x-proxy-model': 'bob/claude-sonnet-4-6',
 						});
 						abort.abort();
 						expect(incoming.signal.aborted).toBe(true);
@@ -535,9 +613,9 @@ it.effect('accepts exactly the body limit and rejects one byte over it before fo
 
 it.effect('routes Codex responses with the same user prefix and a separate model allowlist', () =>
 	Effect.gen(function* () {
-		const seen: Request[] = [];
+		const seen: unknown[] = [];
 		const provided = proxy(Users.testLayer({ alice: 'alice-key' }), async (incoming) => {
-			seen.push(incoming);
+			seen.push(await incoming.json());
 			return new Response('data: {"type":"response.completed"}\n\n', {
 				headers: { 'content-type': 'text/event-stream' },
 			});
@@ -550,7 +628,7 @@ it.effect('routes Codex responses with the same user prefix and a separate model
 			}),
 		).pipe(Effect.provide(provided));
 		expect(valid.status).toBe(200);
-		expect(yield* Effect.promise(() => seen[0]!.json())).toMatchObject({
+		expect(seen[0]).toMatchObject({
 			model: 'alice/gpt-5.4',
 			input: 'synthetic',
 		});

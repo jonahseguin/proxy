@@ -15,6 +15,7 @@
 		"typecheck": "bun run types && tsc -p tsconfig.json --noEmit && tsc -p cli/tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:runtime": "bun run build && vitest run --config vitest.runtime.config.ts",
+		"test:request-size": "bun run build && MINIFLARE_WORKERD_V8_FLAGS=--max-heap-size=128 vitest run --config vitest.runtime.config.ts tests/request-size.integration.ts",
 		"lint": "oxlint .",
 		"lint:fix": "oxlint --fix . && oxfmt .",
 		"format": "oxfmt .",
@@ -23,7 +24,9 @@
 	"dependencies": {
 		"@clack/prompts": "1.8.1",
 		"@cloudflare/containers": "0.3.7",
-		"effect": "4.0.0-rc.117"
+		"effect": "4.0.0-rc.117",
+		"stream-chain": "4.2.6",
+		"stream-json": "3.7.0"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "5.20260810.1",

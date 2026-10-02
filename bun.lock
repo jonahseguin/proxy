@@ -8,6 +8,8 @@
         "@clack/prompts": "1.8.1",
         "@cloudflare/containers": "0.3.7",
         "effect": "4.0.0-rc.117",
+        "stream-chain": "4.2.6",
+        "stream-json": "3.7.0",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "5.20260810.1",
@@ -448,6 +450,10 @@
     "stackback": ["stackback@0.0.2", "", {}, "sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw=="],
 
     "std-env": ["std-env@4.3.0", "", {}, "sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag=="],
+
+    "stream-chain": ["stream-chain@4.2.6", "", {}, "sha512-1zeJ8CrtJfmiba26ui8jXkq/xLRFvhzkdH02D5QLO9Cnovgeb28IJxg88DdraWnjnkbOol/++uIAybJbJhk7ig=="],
+
+    "stream-json": ["stream-json@3.7.0", "", { "dependencies": { "stream-chain": "^4.2.5" } }, "sha512-rCSBdcBP/bPk6T8QFcxAj1MSzAuc5i49cYW6IE7sYObNEPccBJIUiL6fU9c9BWt40aJK0siVynLX7lWaW8alXw=="],
 
     "supports-color": ["supports-color@10.2.2", "", {}, "sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g=="],
 

@@ -18,6 +18,7 @@ import {
 	type AccountUsage,
 } from './account.ts';
 import { allAccountsPath, BodyError, inferencePath, readBody, userHeader } from './gateway.ts';
+import { modelHeader } from './inference-body.ts';
 import { runtimeFailure } from './logging.ts';
 import { accountMetrics, quotaRequest, quotaWindows } from './metrics.ts';
 import { isUserId } from './users.ts';
@@ -29,7 +30,6 @@ const QuotaResponse = Schema.Struct({ status_code: Schema.Number, body: Schema.S
 const RegisteredModels = Schema.Struct({
 	models: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString })),
 });
-const RequestedModel = Schema.Struct({ model: Schema.NonEmptyString });
 
 export class ProxyContainer extends Container<Env> {
 	defaultPort = 8317;
@@ -358,7 +358,9 @@ export class ProxyContainer extends Container<Env> {
 			stage = 'runtime-readiness';
 			await this.starting;
 			stage = 'requested-model';
-			const { model } = Schema.decodeUnknownSync(RequestedModel)(await request.clone().json());
+			const model = request.headers.get(modelHeader);
+			if (model === null || model.length > 512 || !model.startsWith(`${user}/`))
+				return Response.json({ error: 'invalid_model_metadata' }, { status: 400 });
 			stage = 'model-readiness';
 			if (!this.registeredModels?.has(model)) await this.waitForModels(model, request.signal);
 			if (this.busy) return Response.json({ error: 'account_busy' }, { status: 409 });
@@ -369,6 +371,7 @@ export class ProxyContainer extends Container<Env> {
 			const abort = new AbortController();
 			const headers = new Headers(request.headers);
 			headers.delete(userHeader);
+			headers.delete(modelHeader);
 			headers.set('authorization', `Bearer ${this.env.CPA_API_KEY}`);
 			const upstream = new Request(`http://cpa.internal${path}`, {
 				method: 'POST',

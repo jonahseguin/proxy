@@ -4,7 +4,9 @@ import { Context, Data, Effect, Layer, Option, Schema } from 'effect';
 
 import { AccountId, AccountStatus, credentialLimit, isProvider, type Provider } from './account.ts';
 import { isAdministrator, matchesToken, usersPath } from './admin.ts';
+import { BodyError, inferenceBody, modelHeader } from './inference-body.ts';
 import { Digest, type UserId, Users } from './users.ts';
+export { BodyError, inferenceBodyLimit } from './inference-body.ts';
 
 export interface SettingsValue {
 	readonly adminDigest: string;
@@ -22,8 +24,6 @@ export interface ForwarderInterface {
 export class Forwarder extends Context.Service<Forwarder, ForwarderInterface>()(
 	'proxy/Forwarder',
 ) {}
-
-export const inferenceBodyLimit = 8 * 1024 * 1024;
 
 /** Editor-key route for the caller's own Claude account. */
 export const accountPath = (provider: Provider): string => `/${provider}/accounts`;
@@ -100,10 +100,6 @@ function route(url: URL): Route | null {
 	return null;
 }
 
-export class BodyError extends Data.TaggedError('Gateway.BodyError')<{
-	readonly status: 400 | 413;
-}> {}
-
 const readChunk = (reader: ReadableStreamDefaultReader<Uint8Array>) =>
 	Effect.tryPromise({
 		try: () => reader.read(),
@@ -144,22 +140,6 @@ export const readBody = Effect.fn('Proxy.readBody')(function* (request: Request,
 	}
 
 	return new TextDecoder().decode(bytes);
-});
-
-const InferenceEnvelope = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
-
-const inferenceBody = Effect.fn('Proxy.inferenceBody')(function* (request: Request) {
-	const text = yield* readBody(request, inferenceBodyLimit);
-
-	const envelope = yield* Schema.decodeUnknownEffect(InferenceEnvelope)(text).pipe(
-		Effect.mapError(() => new BodyError({ status: 400 })),
-	);
-
-	const model = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(envelope['model']).pipe(
-		Effect.mapError(() => new BodyError({ status: 400 })),
-	);
-
-	return { envelope, model };
 });
 
 const RegisterBody = Schema.fromJsonString(Schema.Struct({ digest: Digest }));
@@ -376,23 +356,33 @@ const handleInference = Effect.fn('Proxy.inference')(function* (
 ) {
 	const settings = yield* Settings;
 
-	const decoded = yield* inferenceBody(request).pipe(
-		Effect.catchTag('Gateway.BodyError', (error) => Effect.succeed(error)),
-	);
+	const decoded = yield* Effect.tryPromise({
+		try: () => inferenceBody(request, id),
+		catch: (error) => (error instanceof BodyError ? error : new BodyError({ status: 400 })),
+	}).pipe(Effect.catchTag('Gateway.BodyError', (error) => Effect.succeed(error)));
 
 	if (decoded instanceof BodyError) {
 		return anthropicError(
 			decoded.status,
 			'invalid_request_error',
-			decoded.status === 413 ? 'Request body exceeds 8 MiB' : 'Invalid JSON or missing model',
+			decoded.status === 413
+				? 'Request body exceeds the 32 MiB input or 33 MiB rewritten limit'
+				: decoded.status === 503
+					? 'Inference body memory is temporarily at capacity'
+					: 'Invalid JSON or missing model',
 		);
 	}
 
 	if (!settings.models[provider].includes(decoded.model)) {
+		decoded.dispose();
 		return anthropicError(403, 'permission_error', 'Model is not allowed');
 	}
 
-	const headers = new Headers({ 'content-type': 'application/json', [userHeader]: id });
+	const headers = new Headers({
+		'content-type': 'application/json',
+		[userHeader]: id,
+		[modelHeader]: `${id}/${decoded.model}`,
+	});
 
 	for (const name of [
 		'anthropic-version',
@@ -411,14 +401,18 @@ const handleInference = Effect.fn('Proxy.inference')(function* (
 		if (value !== null) headers.set(name, value);
 	}
 
-	// CPA routes `<user>/<model>` to that user's credential.
-	const body = JSON.stringify({ ...decoded.envelope, model: `${id}/${decoded.model}` });
 	const url = new URL(request.url);
 	url.search = '';
 
 	return yield* forward(
-		new Request(url.href, { method: 'POST', headers, body, signal: request.signal }),
-	);
+		new Request(url.href, {
+			method: 'POST',
+			headers,
+			body: decoded.body,
+			signal: request.signal,
+			duplex: 'half',
+		} as RequestInit),
+	).pipe(Effect.ensuring(Effect.sync(decoded.dispose)));
 });
 
 export const handleRequest = Effect.fn('Proxy.request')(function* (request: Request) {
