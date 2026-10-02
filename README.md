@@ -1,4 +1,4 @@
-# Jonah's account proxy
+# proxy
 
 One editor key for your Claude and ChatGPT subscriptions, hosted on a Cloudflare Worker with one private [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) container and private R2 credential storage.
 
